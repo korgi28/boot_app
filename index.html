@@ -2,211 +2,284 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <title>GraviVPN Strike 3D</title>
+    <title>GraviVPN Strike 3D: Pro</title>
     <style>
-        body { margin: 0; background: #111; color: #0f0; overflow: hidden; font-family: monospace; }
+        body { margin: 0; background: #000; overflow: hidden; font-family: 'Segoe UI', sans-serif; }
         canvas { display: block; }
-        #hud {
-            position: absolute; bottom: 20px; left: 20px;
-            font-size: 24px; text-shadow: 2px 2px #000;
-            pointer-events: none;
+        
+        #overlay {
+            position: absolute; inset: 0; pointer-events: none;
+            display: flex; flex-direction: column; justify-content: space-between; padding: 30px;
         }
+
+        .hud-top { display: flex; justify-content: space-between; align-items: flex-start; }
+        .hud-bottom { display: flex; justify-content: space-between; align-items: flex-end; }
+
+        .stat-box { 
+            background: rgba(0,0,0,0.6); border-left: 4px solid #0f0; 
+            padding: 10px 20px; color: #0f0; font-size: 24px; font-weight: bold;
+        }
+
         #crosshair {
             position: absolute; top: 50%; left: 50%;
-            width: 10px; height: 10px; border: 2px solid rgba(0,255,0,0.5);
+            width: 20px; height: 20px; border: 2px solid rgba(0,255,0,0.8);
             transform: translate(-50%, -50%); border-radius: 50%;
         }
-        #weapon {
-            position: absolute; bottom: 0; left: 50%;
-            transform: translateX(-50%); width: 300px;
-            transition: bottom 0.1s;
+
+        #weapon-sprite {
+            position: absolute; bottom: 0; left: 60%; transform: translateX(-50%);
+            width: 400px; image-rendering: pixelated; pointer-events: none;
         }
-        .flash { position: absolute; top: 45%; left: 50%; width: 50px; height: 50px; 
-                 background: radial-gradient(circle, gold, transparent); display: none; }
+
+        #msg { 
+            position: absolute; top: 20%; left: 50%; transform: translate(-50%, -50%);
+            color: white; text-align: center; background: rgba(0,0,0,0.8); padding: 10px;
+        }
+
+        #shop {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: rgba(0,20,0,0.9); border: 2px solid #0f0; padding: 20px;
+            display: none; pointer-events: all; color: white;
+        }
     </style>
 </head>
 <body>
 
-    <div id="crosshair"></div>
-    <div id="hud">HP: <span id="hp">100</span> | AMMO: <span id="ammo">30</span> | FPS: <span id="fps">0</span></div>
-    <div id="flash" class="flash"></div>
-    
-    <svg id="weapon" viewBox="0 0 200 100">
-        <rect x="80" y="40" width="40" height="60" fill="#333" />
-        <rect x="75" y="20" width="50" height="25" fill="#222" />
-        <rect x="95" y="0" width="10" height="30" fill="#111" />
-    </svg>
+<div id="msg">КЛИКНИТЕ ПО ЭКРАНУ, ЧТОБЫ НАЧАТЬ УПРАВЛЕНИЕ<br>[B] - Магазин | [R] - Перезарядка | [1-3] - Оружие</div>
 
-    <canvas id="c"></canvas>
+<div id="shop">
+    <h3>ОРУЖЕЙНАЯ GraviVPN</h3>
+    <p>Ваши деньги: $<span id="shop-money">0</span></p>
+    <button onclick="buyAmmo()">Купить патроны ($500)</button>
+    <button onclick="buyRifle()">Купить Винтовку ($2500)</button>
+    <button onclick="closeShop()">Закрыть (ESC)</button>
+</div>
+
+<div id="overlay">
+    <div class="hud-top">
+        <div class="stat-box" style="border-color: #ff0;">$ <span id="money">800</span></div>
+        <div id="kill-log" style="color: white; text-align: right;"></div>
+    </div>
+    <div class="hud-bottom">
+        <div class="stat-box">HP: <span id="hp">100</span></div>
+        <div class="stat-box" style="border-color: #0af;">AMMO: <span id="ammo">12</span> / <span id="res">24</span></div>
+    </div>
+</div>
+
+<div id="crosshair"></div>
+<svg id="weapon-sprite" viewBox="0 0 200 200">
+    <path id="gun-path" d="M100,150 L120,100 L140,100 L130,150 Z" fill="#333" />
+    <rect id="muzzle" x="115" y="80" width="10" height="30" fill="#111" />
+</svg>
+
+<canvas id="screen"></canvas>
 
 <script>
 /**
- * GRAVIVPN 3D ENGINE (Raycasting)
+ * GRAVIVPN 3D ENGINE v4.0 (Pointer Lock + Raycasting)
  */
-const canvas = document.getElementById('c');
+
+const canvas = document.getElementById('screen');
 const ctx = canvas.getContext('2d');
-const hpEl = document.getElementById('hp');
-const ammoEl = document.getElementById('ammo');
+let W = window.innerWidth, H = window.innerHeight;
+canvas.width = W; canvas.height = H;
 
-let W = window.innerWidth;
-let H = window.innerHeight;
-canvas.width = W;
-canvas.height = H;
-
-// Карта (1 - стена, 0 - пусто)
+// --- КАРТА (БОЛЬШАЯ: 24x24) ---
 const map = [
-    [1,1,1,1,1,1,1,1,1,1],
-    [1,0,0,0,0,0,0,0,0,1],
-    [1,0,1,1,0,1,1,1,0,1],
-    [1,0,1,0,0,0,0,1,0,1],
-    [1,0,0,0,1,1,0,0,0,1],
-    [1,0,1,0,0,0,0,1,0,1],
-    [1,0,1,1,1,1,0,1,0,1],
-    [1,0,0,0,0,0,0,0,0,1],
-    [1,1,1,1,1,1,1,1,1,1],
+    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+    [1,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [1,0,1,1,0,1,0,1,1,1,0,1,1,1,0,1,1,1,1,1,1,0,0,1],
+    [1,0,1,0,0,0,0,0,0,1,0,0,0,1,0,0,0,0,0,0,1,0,0,1],
+    [1,0,1,0,1,1,1,1,0,1,1,1,0,1,1,1,0,1,1,0,1,0,0,1],
+    [1,0,0,0,1,0,0,0,0,0,0,1,0,0,0,1,0,1,0,0,0,0,0,1],
+    [1,1,1,0,1,0,1,1,1,1,0,1,1,1,0,1,0,1,0,1,1,1,0,1],
+    [1,0,0,0,0,0,1,0,0,0,0,0,0,1,0,0,0,0,0,1,0,0,0,1],
+    [1,0,1,1,1,0,1,0,1,1,1,1,0,1,1,1,1,1,0,1,0,1,0,1],
+    [1,0,0,0,1,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,1,0,1],
+    [1,1,1,0,1,1,1,0,1,0,1,1,1,1,1,1,1,1,1,1,0,1,0,1],
+    [1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,1,0,0,0,1],
+    [1,0,1,1,1,1,1,1,1,0,1,0,1,1,1,1,1,1,0,1,1,1,0,1],
+    [1,0,1,0,0,0,0,0,1,0,0,0,1,0,0,0,0,1,0,0,0,1,0,1],
+    [1,0,0,0,1,1,1,0,1,1,1,0,1,0,1,1,0,1,1,1,0,1,0,1],
+    [1,1,1,0,1,0,0,0,0,0,1,0,0,0,1,0,0,0,0,1,0,0,0,1],
+    [1,0,0,0,1,0,1,1,1,0,1,1,1,0,1,0,1,1,0,1,1,1,0,1],
+    [1,0,1,0,0,0,1,0,0,0,0,0,1,0,0,0,1,0,0,0,0,0,0,1],
+    [1,0,1,1,1,1,1,0,1,1,1,0,1,1,1,1,1,0,1,1,1,1,0,1],
+    [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,1],
+    [1,1,1,1,1,0,1,1,1,0,1,1,1,1,1,1,1,0,1,0,1,1,1,1],
+    [1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [1,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,1],
+    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
 ];
-const mapW = map[0].length;
-const mapH = map.length;
-const cellSize = 64;
 
-// Игрок
-const p = {
-    x: 120, y: 120,
-    angle: Math.PI / 4,
-    fov: Math.PI / 3,
-    hp: 100, ammo: 30,
-    speed: 0, rotSpeed: 0
+// --- СОСТОЯНИЕ ---
+const player = {
+    x: 100, y: 100, dir: 0,
+    hp: 100, money: 800,
+    ammo: 12, res: 24, rifleOwned: false,
+    weapon: 'pistol', reloading: false
 };
 
-// Враги
-let enemies = [
-    {x: 400, y: 400, alive: true, hp: 50}
-];
-
-// Управление
+const enemies = [];
+const particles = [];
 const keys = {};
-window.onkeydown = e => keys[e.code] = true;
+
+// --- УПРАВЛЕНИЕ МЫШЬЮ ---
+canvas.onclick = () => canvas.requestPointerLock();
+document.addEventListener('mousemove', (e) => {
+    if (document.pointerLockElement === canvas) {
+        player.dir += e.movementX * 0.003;
+    }
+});
+
+window.onkeydown = e => {
+    keys[e.code] = true;
+    if(e.code === 'KeyB') toggleShop();
+    if(e.code === 'KeyR') reload();
+};
 window.onkeyup = e => keys[e.code] = false;
 
-function move() {
-    if(keys['KeyW']) { p.speed = 3; }
-    else if(keys['KeyS']) { p.speed = -3; }
-    else { p.speed = 0; }
+// --- МАГАЗИН ---
+function toggleShop() {
+    const s = document.getElementById('shop');
+    s.style.display = (s.style.display === 'block') ? 'none' : 'block';
+    document.getElementById('shop-money').innerText = player.money;
+}
+function closeShop() { document.getElementById('shop').style.display = 'none'; }
+function buyAmmo() {
+    if(player.money >= 500) { player.money -= 500; player.res += 30; updateHUD(); }
+}
+function buyRifle() {
+    if(player.money >= 2500) { player.money -= 2500; player.rifleOwned = true; player.weapon = 'rifle'; updateHUD(); }
+}
 
-    if(keys['KeyA']) { p.rotSpeed = -0.05; }
-    else if(keys['KeyD']) { p.rotSpeed = 0.05; }
-    else { p.rotSpeed = 0; }
+function reload() {
+    if(player.reloading || player.res <= 0) return;
+    player.reloading = true;
+    setTimeout(() => {
+        let max = (player.weapon === 'pistol') ? 12 : 30;
+        let need = max - player.ammo;
+        let take = Math.min(need, player.res);
+        player.ammo += take; player.res -= take;
+        player.reloading = false; updateHUD();
+    }, 1500);
+}
 
-    p.angle += p.rotSpeed;
+// --- СТРЕЛЬБА ---
+window.onmousedown = () => {
+    if(document.pointerLockElement !== canvas || player.reloading || player.ammo <= 0) return;
+    player.ammo--;
+    updateHUD();
     
-    let nx = p.x + Math.cos(p.angle) * p.speed;
-    let ny = p.y + Math.sin(p.angle) * p.speed;
+    // Эффект выстрела
+    document.getElementById('weapon-sprite').style.bottom = "-20px";
+    setTimeout(() => document.getElementById('weapon-sprite').style.bottom = "0", 50);
 
-    // Простая проверка коллизий
-    if(map[Math.floor(ny/cellSize)][Math.floor(nx/cellSize)] === 0) {
-        p.x = nx; p.y = ny;
+    // Проверка попадания
+    enemies.forEach((en, i) => {
+        if(!en.alive) return;
+        let angTo = Math.atan2(en.y - player.y, en.x - player.x);
+        let diff = angTo - player.dir;
+        while(diff < -Math.PI) diff += Math.PI*2;
+        while(diff > Math.PI) diff -= Math.PI*2;
+        
+        let dist = Math.hypot(en.x - player.x, en.y - player.y);
+        if(Math.abs(diff) < 0.1 && dist < 500) {
+            en.hp -= (player.weapon === 'pistol' ? 35 : 60);
+            if(en.hp <= 0) { en.alive = false; player.money += 300; updateHUD(); }
+        }
+    });
+};
+
+// --- ГЛАВНЫЙ ЦИКЛ ---
+function update() {
+    const moveSpeed = 2.5;
+    let dx = 0, dy = 0;
+    if(keys['KeyW']) { dx += Math.cos(player.dir); dy += Math.sin(player.dir); }
+    if(keys['KeyS']) { dx -= Math.cos(player.dir); dy -= Math.sin(player.dir); }
+    if(keys['KeyA']) { dx += Math.sin(player.dir); dy -= Math.cos(player.dir); }
+    if(keys['KeyD']) { dx -= Math.sin(player.dir); dy += Math.cos(player.dir); }
+
+    let nx = player.x + dx * moveSpeed;
+    let ny = player.y + dy * moveSpeed;
+
+    // Коллизии
+    if(map[Math.floor(ny/64)][Math.floor(nx/64)] === 0) {
+        player.x = nx; player.y = ny;
+    }
+
+    // AI Врагов
+    if(Math.random() < 0.01 && enemies.length < 10) {
+        let rx, ry;
+        do {
+            rx = Math.floor(Math.random()*24); ry = Math.floor(Math.random()*24);
+        } while(map[ry][rx] !== 0);
+        enemies.push({x: rx*64+32, y: ry*64+32, alive: true, hp: 100});
     }
 }
 
-// Стрельба
-window.onmousedown = () => {
-    if(p.ammo > 0) {
-        p.ammo--;
-        ammoEl.innerText = p.ammo;
-        // Эффект отдачи и вспышки
-        document.getElementById('weapon').style.bottom = "-20px";
-        document.getElementById('flash').style.display = "block";
-        setTimeout(() => {
-            document.getElementById('weapon').style.bottom = "0";
-            document.getElementById('flash').style.display = "none";
-        }, 50);
-
-        // Проверка попадания в центр экрана (врага)
-        enemies.forEach(en => {
-            if(en.alive) {
-                // Если враг примерно в центре угла обзора
-                let angToEn = Math.atan2(en.y - p.y, en.x - p.x);
-                let diff = angToEn - p.angle;
-                while(diff < -Math.PI) diff += Math.PI*2;
-                while(diff > Math.PI) diff -= Math.PI*2;
-                if(Math.abs(diff) < 0.1) {
-                    en.hp -= 25;
-                    if(en.hp <= 0) en.alive = false;
-                }
-            }
-        });
-    }
-};
-
-function render3D() {
+function render() {
     // Небо и пол
-    ctx.fillStyle = "#222"; ctx.fillRect(0, 0, W, H/2);
-    ctx.fillStyle = "#444"; ctx.fillRect(0, H/2, W, H/2);
+    ctx.fillStyle = "#111"; ctx.fillRect(0,0,W,H/2);
+    ctx.fillStyle = "#222"; ctx.fillRect(0,H/2,W,H/2);
 
-    const step = p.fov / W;
-    for(let i = 0; i < W; i++) {
-        let rayAngle = (p.angle - p.fov/2) + (i * step);
-        let distance = 0;
-        let hitWall = false;
+    // Raycasting
+    const fov = Math.PI/3;
+    for(let i=0; i<W; i+=2) {
+        let angle = (player.dir - fov/2) + (i/W)*fov;
+        let dist = 0, hit = false;
+        let cosA = Math.cos(angle), sinA = Math.sin(angle);
 
-        let eyeX = Math.cos(rayAngle);
-        let eyeY = Math.sin(rayAngle);
-
-        while(!hitWall && distance < 800) {
-            distance += 2;
-            let testX = Math.floor((p.x + eyeX * distance) / cellSize);
-            let testY = Math.floor((p.y + eyeY * distance) / cellSize);
-
-            if(testX < 0 || testX >= mapW || testY < 0 || testY >= mapH) {
-                hitWall = true; distance = 800;
-            } else if(map[testY][testX] === 1) {
-                hitWall = true;
-            }
+        while(!hit && dist < 1000) {
+            dist += 4;
+            let tx = Math.floor((player.x + cosA*dist)/64);
+            let ty = Math.floor((player.y + sinA*dist)/64);
+            if(map[ty] && map[ty][tx] === 1) hit = true;
         }
 
-        // Исправление эффекта "рыбьего глаза"
-        let actualDist = distance * Math.cos(rayAngle - p.angle);
-        let ceiling = H/2 - H/actualDist * 30;
-        let floor = H - ceiling;
-        let wallHeight = floor - ceiling;
-
-        // Отрисовка вертикальной полоски стены
-        let shade = 255 - (actualDist / 800 * 255);
-        ctx.fillStyle = `rgb(0, ${shade/2}, ${shade})`;
-        ctx.fillRect(i, ceiling, 1, wallHeight);
+        let fixDist = dist * Math.cos(angle - player.dir);
+        let h = (64 * H) / fixDist;
+        let color = 255 - (fixDist/1000)*255;
+        ctx.fillStyle = `rgb(0, ${color/2}, ${color})`;
+        ctx.fillRect(i, H/2 - h/2, 2, h);
     }
 
-    // Отрисовка врагов (упрощенно)
+    // Отрисовка врагов
     enemies.forEach(en => {
         if(!en.alive) return;
-        let angToEn = Math.atan2(en.y - p.y, en.x - p.x);
-        let diff = angToEn - p.angle;
+        let angTo = Math.atan2(en.y - player.y, en.x - player.x);
+        let diff = angTo - player.dir;
         while(diff < -Math.PI) diff += Math.PI*2;
         while(diff > Math.PI) diff -= Math.PI*2;
 
-        if(Math.abs(diff) < p.fov) {
-            let dist = Math.hypot(en.x - p.x, en.y - p.y);
-            let screenX = (0.5 * (diff / (p.fov/2)) + 0.5) * W;
-            let spriteSize = H / dist * 40;
+        if(Math.abs(diff) < fov) {
+            let d = Math.hypot(en.x-player.x, en.y-player.y);
+            let sx = (0.5 * (diff/(fov/2)) + 0.5) * W;
+            let size = (64*H)/d;
             ctx.fillStyle = "red";
-            ctx.fillRect(screenX - spriteSize/2, H/2 - spriteSize/2, spriteSize, spriteSize);
+            ctx.fillRect(sx - size/4, H/2 - size/4, size/2, size/2);
+            // Полоска HP
+            ctx.fillStyle = "green";
+            ctx.fillRect(sx - size/4, H/2 - size/4 - 10, (en.hp/100)*size/2, 5);
         }
     });
 }
 
+function updateHUD() {
+    document.getElementById('hp').innerText = Math.ceil(player.hp);
+    document.getElementById('money').innerText = player.money;
+    document.getElementById('ammo').innerText = player.ammo;
+    document.getElementById('res').innerText = player.res;
+}
+
 function loop() {
-    move();
-    render3D();
+    update();
+    render();
     requestAnimationFrame(loop);
 }
 
 loop();
-
-window.onresize = () => {
-    W = window.innerWidth; H = window.innerHeight;
-    canvas.width = W; canvas.height = H;
-};
-
+updateHUD();
 </script>
 </body>
 </html>
