@@ -2,92 +2,305 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <title>GraviVPN CS Mini-Proto</title>
+    <title>GraviVPN Strike v1.2 - Browser Edition</title>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
-        canvas { display: block; cursor: crosshair; }
-        #ui {
-            position: absolute; bottom: 20px; left: 20px;
-            color: #00ff00; font-size: 24px; text-shadow: 2px 2px #000;
-            pointer-events: none;
+        body { margin: 0; overflow: hidden; background: #0b0b0b; font-family: 'Courier New', Courier, monospace; user-select: none; }
+        canvas { display: block; filter: contrast(1.1) brightness(0.9); }
+        
+        /* CS 1.6 HUD Style */
+        #hud {
+            position: absolute; width: 100%; height: 100%;
+            pointer-events: none; color: rgba(255, 180, 0, 0.9);
+            text-shadow: 2px 2px 0px rgba(0,0,0,0.8);
         }
+        .stat { position: absolute; bottom: 30px; font-size: 32px; font-weight: bold; }
+        #hp { left: 50px; }
+        #armor { left: 200px; }
+        #ammo { right: 50px; text-align: right; }
+        #money { position: absolute; top: 50px; right: 50px; color: #00ff00; font-size: 28px; }
+        
         #crosshair {
             position: absolute; top: 50%; left: 50%;
-            width: 20px; height: 20px;
-            border-left: 2px solid #0f0; border-right: 2px solid #0f0;
-            margin-left: -10px; margin-top: -1px;
-            pointer-events: none;
+            width: 24px; height: 24px; transform: translate(-50%, -50%);
         }
-        #crosshair::after {
-            content: ''; position: absolute; top: 50%; left: 50%;
-            width: 20px; height: 20px;
-            border-top: 2px solid #0f0; border-bottom: 2px solid #0f0;
-            margin-left: -1px; margin-top: -10px;
+        .ch-line { position: absolute; background: #00ff00; box-shadow: 0 0 2px #000; }
+        .v { width: 2px; height: 10px; left: 11px; }
+        .h { width: 10px; height: 2px; top: 11px; }
+        #ch-t { top: 0; } #ch-b { bottom: 0; } #ch-l { left: 0; } #ch-r { right: 0; }
+
+        #killfeed {
+            position: absolute; top: 20px; right: 20px;
+            text-align: right; color: #fff; font-size: 14px;
+        }
+        #reload-msg {
+            position: absolute; top: 60%; left: 50%; transform: translateX(-50%);
+            color: red; font-size: 20px; display: none;
         }
     </style>
 </head>
 <body>
 
-    <div id="crosshair"></div>
-    <div id="ui">HP: 100 | ARMOR: 100 | AMMO: 30/90</div>
-    <canvas id="gameCanvas"></canvas>
+<div id="hud">
+    <div id="money">$16000</div>
+    <div id="hp" class="stat">+ 100</div>
+    <div id="armor" class="stat">🛡️ 100</div>
+    <div id="ammo" class="stat">30 | 90</div>
+    <div id="reload-msg">RELOADING...</div>
+    <div id="killfeed"></div>
+</div>
 
-    <script>
-        const canvas = document.getElementById('gameCanvas');
-        const ctx = canvas.getContext('2d');
+<div id="crosshair">
+    <div id="ch-t" class="ch-line v"></div>
+    <div id="ch-b" class="ch-line v" style="bottom: 0;"></div>
+    <div id="ch-l" class="ch-line h"></div>
+    <div id="ch-r" class="ch-line h" style="right: 0;"></div>
+</div>
 
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
+<canvas id="world"></canvas>
 
-        // Состояние игрока
-        const player = {
-            x: canvas.width / 2,
-            y: canvas.height / 2,
-            bullets: []
-        };
+<script>
+/**
+ * GRAVIVPN STRIKE ENGINE v1.2
+ * Полный код управления, стрельбы и ботов.
+ */
 
-        // Эффект выстрела
-        function shoot() {
-            player.bullets.push({
-                x: canvas.width / 2,
-                y: canvas.height / 2,
-                timer: 5
-            });
-            console.log("Pew! GraviVPN Protection Active");
-        }
+const canvas = document.getElementById('world');
+const ctx = canvas.getContext('2d');
+const ammoDrive = document.getElementById('ammo');
+const reloadMsg = document.getElementById('reload-msg');
 
-        // Рисование «карты» (имитация 3D через 2D)
-        function draw() {
-            ctx.fillStyle = "#1a1a1a"; // Пол
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-            
-            // Стены (простая перспектива)
-            ctx.strokeStyle = "#333";
-            ctx.beginPath();
-            ctx.moveTo(0, 0); ctx.lineTo(canvas.width, canvas.height);
-            ctx.moveTo(canvas.width, 0); ctx.lineTo(0, canvas.height);
-            ctx.stroke();
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
 
-            // Отрисовка пуль/вспышек
-            ctx.fillStyle = "orange";
-            player.bullets.forEach((b, i) => {
-                ctx.beginPath();
-                ctx.arc(b.x + (Math.random()*10-5), b.y + (Math.random()*10-5), 5, 0, Math.PI*2);
-                ctx.fill();
-                b.timer--;
-                if(b.timer <= 0) player.bullets.splice(i, 1);
-            });
+// --- КОНФИГУРАЦИЯ ---
+const SETTINGS = {
+    moveSpeed: 4,
+    recoil: 15,
+    spread: 0.05,
+    bulletSpeed: 20,
+    enemySpawnRate: 0.01
+};
 
-            requestAnimationFrame(draw);
-        }
+const player = {
+    x: canvas.width / 2,
+    y: canvas.height / 2,
+    hp: 100,
+    armor: 100,
+    money: 16000,
+    ammo: 30,
+    reserve: 90,
+    isReloading: false,
+    weaponKick: 0,
+    keys: {}
+};
 
-        window.addEventListener('mousedown', shoot);
-        window.addEventListener('resize', () => {
-            canvas.width = window.innerWidth;
-            canvas.height = window.innerHeight;
+let enemies = [];
+let particles = [];
+let bullets = [];
+let frame = 0;
+
+// --- ЗВУКОВАЯ СИСТЕМА (Web Audio API) ---
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+function playShotSound() {
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(150, audioCtx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(40, audioCtx.currentTime + 0.1);
+    gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.1);
+}
+
+// --- УПРАВЛЕНИЕ ---
+window.addEventListener('keydown', e => player.keys[e.code] = true);
+window.addEventListener('keyup', e => player.keys[e.code] = false);
+window.addEventListener('mousedown', () => { if(!player.isReloading) shoot(); });
+window.addEventListener('keydown', e => { if(e.code === 'KeyR') reload(); });
+
+function shoot() {
+    if (player.ammo <= 0) { reload(); return; }
+    
+    player.ammo--;
+    player.weaponKick = 10;
+    updateHUD();
+    playShotSound();
+
+    // Создаем пулю с разбросом
+    const angle = Math.atan2(mouse.y - player.y, mouse.x - player.x);
+    const spreadAngle = angle + (Math.random() - 0.5) * SETTINGS.spread;
+    
+    bullets.push({
+        x: player.x,
+        y: player.y,
+        vx: Math.cos(spreadAngle) * SETTINGS.bulletSpeed,
+        vy: Math.sin(spreadAngle) * SETTINGS.bulletSpeed,
+        life: 100
+    });
+
+    // Эффект отдачи прицела
+    document.getElementById('crosshair').style.transform = `translate(-50%, -${50 + Math.random()*20}%) scale(1.2)`;
+    setTimeout(() => {
+        document.getElementById('crosshair').style.transform = `translate(-50%, -50%) scale(1)`;
+    }, 50);
+}
+
+function reload() {
+    if (player.isReloading || player.ammo === 30 || player.reserve <= 0) return;
+    player.isReloading = true;
+    reloadMsg.style.display = 'block';
+    
+    setTimeout(() => {
+        const needed = 30 - player.ammo;
+        const take = Math.min(needed, player.reserve);
+        player.ammo += take;
+        player.reserve -= take;
+        player.isReloading = false;
+        reloadMsg.style.display = 'none';
+        updateHUD();
+    }, 2000); // 2 сек на перезарядку как в CS
+}
+
+// --- МЫШЬ ---
+let mouse = { x: 0, y: 0 };
+window.addEventListener('mousemove', e => {
+    mouse.x = e.clientX;
+    mouse.y = e.clientY;
+});
+
+// --- ЛОГИКА ---
+function update() {
+    // Движение
+    if (player.keys['KeyW']) player.y -= SETTINGS.moveSpeed;
+    if (player.keys['KeyS']) player.y += SETTINGS.moveSpeed;
+    if (player.keys['KeyA']) player.x -= SETTINGS.moveSpeed;
+    if (player.keys['KeyD']) player.x += SETTINGS.moveSpeed;
+
+    // Пули
+    bullets.forEach((b, index) => {
+        b.x += b.vx;
+        b.y += b.vy;
+        b.life--;
+        if (b.life <= 0) bullets.splice(index, 1);
+
+        // Попадание в врагов
+        enemies.forEach((en, eIdx) => {
+            const dist = Math.hypot(b.x - en.x, b.y - en.y);
+            if (dist < 25) {
+                en.hp -= 35;
+                createParticles(en.x, en.y, '#f00');
+                bullets.splice(index, 1);
+                if (en.hp <= 0) {
+                    enemies.splice(eIdx, 1);
+                    player.money += 300;
+                    addKillLog();
+                    updateHUD();
+                }
+            }
         });
+    });
 
-        draw();
-    </script>
+    // Спавн врагов
+    if (Math.random() < SETTINGS.enemySpawnRate) {
+        enemies.push({
+            x: Math.random() * canvas.width,
+            y: Math.random() * canvas.height,
+            hp: 100,
+            type: 'Terrorist'
+        });
+    }
+
+    // Частицы
+    particles.forEach((p, i) => {
+        p.x += p.vx; p.y += p.vy; p.alpha -= 0.02;
+        if(p.alpha <= 0) particles.splice(i, 1);
+    });
+}
+
+function createParticles(x, y, color) {
+    for(let i=0; i<8; i++) {
+        particles.push({
+            x, y, color,
+            vx: (Math.random()-0.5)*5,
+            vy: (Math.random()-0.5)*5,
+            alpha: 1
+        });
+    }
+}
+
+function updateHUD() {
+    document.getElementById('money').innerText = `$${player.money}`;
+    ammoDrive.innerText = `${player.ammo} | ${player.reserve}`;
+    document.getElementById('hp').innerText = `+ ${player.hp}`;
+}
+
+function addKillLog() {
+    const feed = document.getElementById('killfeed');
+    const kill = document.createElement('div');
+    kill.innerHTML = `<span style="color:#5af">GraviVPN</span> <img src="https://img.icons8.com/color/20/000000/headshot.png" style="vertical-align:middle"> Enemy`;
+    feed.appendChild(kill);
+    setTimeout(() => kill.remove(), 3000);
+}
+
+// --- ОТРИСОВКА ---
+function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Рисуем сетку (пол de_dust2)
+    ctx.strokeStyle = "#222";
+    for(let i=0; i<canvas.width; i+=50) {
+        ctx.beginPath(); ctx.moveTo(i,0); ctx.lineTo(i, canvas.height); ctx.stroke();
+    }
+    for(let i=0; i<canvas.height; i+=50) {
+        ctx.beginPath(); ctx.moveTo(0,i); ctx.lineTo(canvas.width, i); ctx.stroke();
+    }
+
+    // Игрок (вид сверху)
+    ctx.save();
+    ctx.translate(player.x, player.y);
+    ctx.rotate(Math.atan2(mouse.y - player.y, mouse.x - player.x));
+    
+    // Тело
+    ctx.fillStyle = "#3e4a36";
+    ctx.fillRect(-15, -15, 30, 30);
+    // Оружие (АК-47)
+    ctx.fillStyle = "#5d4037";
+    ctx.fillRect(10, 5, 35, 6);
+    ctx.restore();
+
+    // Враги
+    enemies.forEach(en => {
+        ctx.fillStyle = "#a52a2a";
+        ctx.beginPath();
+        ctx.arc(en.x, en.y, 15, 0, Math.PI*2);
+        ctx.fill();
+        // Полоска HP
+        ctx.fillStyle = "red";
+        ctx.fillRect(en.x - 15, en.y - 25, 30, 4);
+        ctx.fillStyle = "green";
+        ctx.fillRect(en.x - 15, en.y - 25, (en.hp/100)*30, 4);
+    });
+
+    // Пули
+    ctx.fillStyle = "yellow";
+    bullets.forEach(b => ctx.fillRect(b.x, b.y, 3, 3));
+
+    // Частицы крови
+    particles.forEach(p => {
+        ctx.globalAlpha = p.alpha;
+        ctx.fillStyle = p.color;
+        ctx.fillRect(p.x, p.y, 4, 4);
+    });
+    ctx.globalAlpha = 1;
+
+    update();
+    requestAnimationFrame(draw);
+}
+
+draw();
+</script>
 </body>
 </html>
